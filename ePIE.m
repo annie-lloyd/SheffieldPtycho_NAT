@@ -2,7 +2,7 @@ function [obj, probe] = ePIE(expt, recon, probe)
 % version 0: 11/12/2023. 
 % Please refer to the end of the code for licencing information.
 %
-% An implementation of the regularised Ptychographical Iterative Engine
+% An implementation of the extended Ptychographical Iterative Engine
 % algorithm
 %
 % *** INPUTS ***
@@ -68,6 +68,7 @@ dx  = expt.wavelength*expt.cameraLength./...
 % pixel locations for each sample position
 tlY = round(expt.positions.y/dx(1))+1;
 tlX = round(expt.positions.x/dx(2))+1;
+
 brY = tlY + M - 1;
 brX = tlX + N - 1;
 

@@ -47,7 +47,7 @@ function [obj, probe] = HIVE(expt, recon, probe)
 % Andrew. M. Maiden, Wenjie Mei and Peng Li,                              %
 % "WASP: Weighted Average of Sequential Projections for ptychographic     %
 % phase retrieval,"                                                       %
-% XXX, pp. XX-XX (2024).                                                  %                                                 
+% Optics Express 32(12), pp. 21327-21344, (2024).                         %                                                 
 %                                                                         %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
