@@ -1,14 +1,13 @@
-function [obj, probe] = rPIE(expt, recon, probe)
+function [obj, probe] = DM(expt, recon, probe)
 % version 0: 11/12/2023. 
 % Please refer to the end of the code for licencing information.
 %
-% An implementation of the regularised Ptychographical Iterative Engine
-% algorithm
+% An implementation of the Difference Map ptychographic algorithm
 %
 % *** INPUTS ***
 %
 % expt: a structure containing the experimental parameters and data,
-% having the following fields
+% with the following fields
 %
 % expt.dps              - the recorded diffraction intensities, held in an
 %                         M x N x D array, where each of the D diffraction
@@ -20,14 +19,12 @@ function [obj, probe] = rPIE(expt, recon, probe)
 % expt.cameraLength     - the geometric magnification at the front face of
 %                         the sample
 %
-% recon: a structure containing the reconstruction parameters, having the
+% recon: a structure containing the reconstruction parameters, with the
 % following fields
 %
 % recon.iters          - the number of iterations to carry out
 % recon.gpu            - a flag indicating whether to transfer processing
 %                        to a suitable CUDA-enabled graphics card
-% recon.alpha          - the object step size parameter (~0.25. 1.0 = ePIE)
-% recon.beta           - the probe step size parameter (~1. 1.0 = ePIE)
 % recon.upLimit        - the maximum amplitude of the object - pixels above
 %                        this value will be clipped
 %
@@ -41,11 +38,14 @@ function [obj, probe] = rPIE(expt, recon, probe)
 %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                                                         %
-% Citations for this algorithm:                                           %
-% A. M. Maiden, D. Johnson and P. Li "Further improvements to the         %
-% ptychographical iterative engine,"                                      %
-% Optica 4 (7), pp. 736-745                                               %
+% Citations for this algorithm:                                           %                                      
+% Andrew. M. Maiden, Wenjie Mei and Peng Li,                              %
+% "WASP: Weighted Average of Sequential Projections for ptychographic     %
+% phase retrieval,"                                                       %
+% Optics Express 32(12), pp. 21327-21344, (2024).                         %                                        
 %                                                                         %
+% P. Thibault et al, "High-resolution scanning x-ray diffraction          %
+% microscopy," Science 321 (5887), pp. 379-382 (2008).                    %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % Pre-processing steps
@@ -57,6 +57,8 @@ expt.positions.y = expt.positions.y - min(expt.positions.y,[],'all');
 % compute pixel pitch in the sample plane
 M   = size(expt.dps,1);
 N   = size(expt.dps,2);
+J   = size(expt.dps,3);
+
 dx  = expt.wavelength*expt.cameraLength./...
     ([M,N]*expt.cameraPixelPitch);
 
@@ -81,49 +83,79 @@ probePower = sum(expt.dps(:,:,b),'all');
 % correct the initial probe's power
 probe = probe*sqrt(probePower/(numel(probe)*sum(abs(probe(:)).^2)));
 
+% initialise exit waves (the initial object is all ones, so the initial 
+% exit waves are all just 1*probe)
+EWs = zeros(M,N,J) + probe;
+
 % pre-square-root and pre-fftshift the diffraction patterns (for speed)
 expt.dps = fftshift(fftshift(realsqrt(expt.dps),1),2);
 
-% simple display
-imH = imagesc(angle(obj));
-axis image;
-colormap gray;
+% zero-division constant
+c = 1e-10;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % load variables onto gpu if required
 if recon.gpu
-    obj      = gpuArray(single(obj));
-    probe    = gpuArray(single(probe));
-    expt.dps = gpuArray(single(expt.dps));
+    obj      = gpuArray(obj);
+    probe    = gpuArray(probe);
+    expt.dps = gpuArray(expt.dps);
+    EWs      = gpuArray(EWs);
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 for k = 1:recon.iters
 
-    shuffleOrder = randperm(size(expt.dps,3));
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    for j = shuffleOrder
+    % exit wave update loop
+    for j = 1:J
 
-        % update exit wave to conform with diffraction data
-        objBox    = obj(tlY(j):brY(j),tlX(j):brX(j));
-        EW        = probe.*objBox;
-        revisedEW = ifft2(expt.dps(:,:,j).*sign(fft2(EW)));
+        % calculate the jth exit wave
+        tempEW = probe.*obj(tlY(j):brY(j),tlX(j):brX(j));
 
-        % sequential projection update of object and probe
-        obj(tlY(j):brY(j),tlX(j):brX(j)) = objBox + ...
-            conj(probe).*(revisedEW - EW)./(abs(probe).^2 + recon.alpha*mean(abs(probe).^2,'all'));
+        % update current exit wave to conform with diffraction data
+        revisedEW = ifft2(expt.dps(:,:,j).*sign(fft2(2*tempEW - EWs(:,:,j))));
 
-        probe = probe + conj(objBox).*(revisedEW - EW)./(abs(objBox).^2 + recon.beta);
-
-        % original rPIE update functions (comment/uncomment as desired):
-        % obj(tlY(j):brY(j),tlX(j):brX(j)) = objBox + ...
-        %   conj(probe).*(revisedEW - EW)./((1-recon.alpha)*abs(probe).^2 + recon.alpha*max(abs(probe).^2,[],'all'));
-        %
-        % probe = probe + conj(objBox).*(revisedEW - EW)./(recon.beta*max(abs(objBox).^2,[],'all'));
+        % update and store new exit wave
+        EWs(:,:,j) = EWs(:,:,j) + revisedEW - tempEW;
 
     end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    % Probe update
+    numP = 0*probe;
+    denP = 0*probe;
+    absO2 = abs(obj).^2;
+    conjO = conj(obj);
+
+    for j = 1:J
+        numP = numP + conjO(tlY(j):brY(j),tlX(j):brX(j)).*EWs(:,:,j);
+        denP = denP + absO2(tlY(j):brY(j),tlX(j):brX(j));
+    end
+
+    probe = numP./(denP + c);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    % Object update (works best if the probe is calculated first)
+    numO = 0*obj;
+    denO = 0*obj;
+    absP2 = abs(probe).^2;
+    conjP = conj(probe);
+
+    for j = 1:J
+        numO(tlY(j):brY(j),tlX(j):brX(j))...
+            = numO(tlY(j):brY(j),tlX(j):brX(j)) + conjP.*EWs(:,:,j);
+        denO(tlY(j):brY(j),tlX(j):brX(j))...
+            = denO(tlY(j):brY(j),tlX(j):brX(j)) + absP2;
+    end
+
+    obj = numO./(denO + c);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
     % Apply additional constraints:
 
@@ -132,18 +164,14 @@ for k = 1:recon.iters
     obj(tooHigh) = recon.upLimit*sign(obj(tooHigh));
 
     % recentre probe/object using probe intensity centre of mass
-    absP2 = abs(probe).^2;
     cp = ...
         fix([M,N]/2 - [M,N].*[mean(cumsum(sum(absP2,2))), mean((cumsum(sum(absP2,1))))]/sum(absP2,'all') + 1);
 
     if any(cp)
         probe = circshift(probe,-cp);
         obj   = circshift(obj,-cp);
+        EWs   = circshift(EWs,[-cp 0]);
     end
-
-    % update display
-    set(imH,'cdata',gather(angle(obj)));
-    drawnow();
 
 end
 

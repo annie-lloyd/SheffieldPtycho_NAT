@@ -1,14 +1,14 @@
-function [obj, probe] = RAAR(expt, recon, probe)
+function [obj, probe] = ePIE(expt, recon, probe)
 % version 0: 11/12/2023. 
 % Please refer to the end of the code for licencing information.
 %
-% An implementation of the Relaxed Average Alternating Reflections
-% ptychographic algorithm
+% An implementation of the extended Ptychographical Iterative Engine
+% algorithm
 %
 % *** INPUTS ***
 %
 % expt: a structure containing the experimental parameters and data,
-% with the following fields
+% having the following fields
 %
 % expt.dps              - the recorded diffraction intensities, held in an
 %                         M x N x D array, where each of the D diffraction
@@ -20,13 +20,14 @@ function [obj, probe] = RAAR(expt, recon, probe)
 % expt.cameraLength     - the geometric magnification at the front face of
 %                         the sample
 %
-% recon: a structure containing the reconstruction parameters, with the
+% recon: a structure containing the reconstruction parameters, having the
 % following fields
 %
 % recon.iters          - the number of iterations to carry out
 % recon.gpu            - a flag indicating whether to transfer processing
 %                        to a suitable CUDA-enabled graphics card
-% recon.beta           - the RAAR tuning parameter (0.6 - 0.95. 1.0 = DM)
+% recon.alpha          - the object step size parameter (~0.25. 1.0 for ePIE)
+% recon.beta           - the probe step size parameter (~1. 1.0 for ePIE)
 % recon.upLimit        - the maximum amplitude of the object - pixels above
 %                        this value will be clipped
 %
@@ -41,14 +42,14 @@ function [obj, probe] = RAAR(expt, recon, probe)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                                                         %
 % Citations for this algorithm:                                           %
-% Andrew. M. Maiden, Wenjie Mei and Peng Li,                              %
-% "WASP: Weighted Average of Sequential Projections for ptychographic     %
-% phase retrieval,"                                                       %
-% Optics Express 32(12), pp. 21327-21344, (2024).                         %                                                
+% A. M. Maiden and J.M. Rodenburg "An improved ptychographical phase      %
+% retrieval algorithm for diffractive imaging,"                           %
+% Ultramicroscopy 109 (10), pp. 1256-1262                                 %
 %                                                                         %
-% Stefano Marchesini et al, "Augmented projections for ptychographic      %  
-% imaging,"                                                               %
-% Inverse Problems 29, 115009 (2013).                                     %
+% A. M. Maiden, D. Johnson and P. Li "Further improvements to the         %
+% ptychographical iterative engine,"                                      %
+% Optica 4 (7), pp. 736-745                                               %
+%                                                                         %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % Pre-processing steps
@@ -60,8 +61,6 @@ expt.positions.y = expt.positions.y - min(expt.positions.y,[],'all');
 % compute pixel pitch in the sample plane
 M   = size(expt.dps,1);
 N   = size(expt.dps,2);
-J   = size(expt.dps,3);
-
 dx  = expt.wavelength*expt.cameraLength./...
     ([M,N]*expt.cameraPixelPitch);
 
@@ -69,6 +68,7 @@ dx  = expt.wavelength*expt.cameraLength./...
 % pixel locations for each sample position
 tlY = round(expt.positions.y/dx(1))+1;
 tlX = round(expt.positions.x/dx(2))+1;
+
 brY = tlY + M - 1;
 brX = tlX + N - 1;
 
@@ -86,85 +86,39 @@ probePower = sum(expt.dps(:,:,b),'all');
 % correct the initial probe's power
 probe = probe*sqrt(probePower/(numel(probe)*sum(abs(probe(:)).^2)));
 
-% initialise exit waves (the initial object is all ones, so the initial 
-% exit waves are all just 1*probe)
-EWs = zeros(M,N,J) + probe;
-
 % pre-square-root and pre-fftshift the diffraction patterns (for speed)
 expt.dps = fftshift(fftshift(realsqrt(expt.dps),1),2);
-
-% zero-division constant
-c = 1e-10;
-
-% simple display
-imH = imagesc(angle(obj));
-axis image;
-colormap gray;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % load variables onto gpu if required
 if recon.gpu
-    obj      = gpuArray(obj);
-    probe    = gpuArray(probe);
-    expt.dps = gpuArray(expt.dps);
-    EWs      = gpuArray(EWs);
+    obj      = gpuArray(single(obj));
+    probe    = gpuArray(single(probe));
+    expt.dps = gpuArray(single(expt.dps));
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 for k = 1:recon.iters
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    shuffleOrder = randperm(size(expt.dps,3));
 
-    % exit wave update loop
-    for j = 1:J
-
-        % calculate the jth exit wave
-        tempEW = 2*probe.*obj(tlY(j):brY(j),tlX(j):brX(j)) - EWs(:,:,j);
+    for j = shuffleOrder
 
         % update exit wave to conform with diffraction data
-        revisedEW = ifft2(expt.dps(:,:,j).*sign(fft2(tempEW)));
+        objBox    = obj(tlY(j):brY(j),tlX(j):brX(j));
+        EW        = probe.*objBox;
+        revisedEW = ifft2(expt.dps(:,:,j).*sign(fft2(EW)));
 
-        % calculate second relaxed reflection
-        tempEW = 2*recon.beta*revisedEW + (1-2*recon.beta)*tempEW;
+        % sequential projection update of object and probe
+        obj(tlY(j):brY(j),tlX(j):brX(j)) = objBox + ...
+            recon.alpha*conj(probe).*(revisedEW - EW)./max(abs(probe).^2,[],'all');
 
-        % averaging step
-        EWs(:,:,j) = 0.5*(tempEW + EWs(:,:,j));
+        probe = probe + ...
+            recon.beta*conj(objBox).*(revisedEW - EW)./max(abs(objBox).^2,[],'all');
 
     end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-    % Probe update
-    numP = 0*probe; denP = 0*probe;
-    absO2 = abs(obj).^2;
-    conjO = conj(obj);
-
-    for j = 1:J
-        numP = numP + conjO(tlY(j):brY(j),tlX(j):brX(j)).*EWs(:,:,j);
-        denP = denP + absO2(tlY(j):brY(j),tlX(j):brX(j));
-    end
-
-    probe = numP./(denP + c);
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-    % Object update (works best if the probe is calculated first)
-    numO = 0*obj; denO = 0*obj;
-    absP2 = abs(probe).^2;
-    conjP = conj(probe);
-
-    for j = 1:J
-        numO(tlY(j):brY(j),tlX(j):brX(j))...
-            = numO(tlY(j):brY(j),tlX(j):brX(j)) + conjP.*EWs(:,:,j);
-        denO(tlY(j):brY(j),tlX(j):brX(j))...
-            = denO(tlY(j):brY(j),tlX(j):brX(j)) + absP2;
-    end
-
-    obj = numO./(denO + c);
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
     % Apply additional constraints:
 
@@ -173,19 +127,15 @@ for k = 1:recon.iters
     obj(tooHigh) = recon.upLimit*sign(obj(tooHigh));
 
     % recentre probe/object using probe intensity centre of mass
+    absP2 = abs(probe).^2;
     cp = ...
         fix([M,N]/2 - [M,N].*[mean(cumsum(sum(absP2,2))), mean((cumsum(sum(absP2,1))))]/sum(absP2,'all') + 1);
 
     if any(cp)
         probe = circshift(probe,-cp);
         obj   = circshift(obj,-cp);
-        EWs   = circshift(EWs,[-cp 0]);
     end
-
-    % update display
-    set(imH,'cdata',gather(angle(obj)));
-    drawnow();
-
+    
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

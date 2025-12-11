@@ -19,6 +19,11 @@
 %                                                                         %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+clear; clc;
+addpath('algorithms');
+addpath('tools');
+addpath('ptychograms');
+
 % change the filename here to load different datasests. 
 load('ptychograms/OpticalPtychoDataExample.mat');
 
@@ -26,7 +31,7 @@ load('ptychograms/OpticalPtychoDataExample.mat');
 algorithm_name = 'WASP'; % 'WASP', 'RAAR', 'rPIE', 'ePIE', 'DM', 'ER'
 
 % Option to create initial probe
-%initProbe = TOOLCircleGenerator(512,10);
+%initProbe = circleGenerator(512,10);
 
 % dimention scaling and flipping
 %expt.dps = flipdim(expt.dps,1); % diffraction patterns
@@ -35,7 +40,7 @@ algorithm_name = 'WASP'; % 'WASP', 'RAAR', 'rPIE', 'ePIE', 'DM', 'ER'
 %expt.positions.y = 1.06*expt.positions.y;
 
 % set the reconstruction parameters
-recon.iters      = 20;
+recon.iters      = 2000;
 recon.gpu        = 1;            
 recon.alpha      = 2;         
 recon.beta       = 1;        

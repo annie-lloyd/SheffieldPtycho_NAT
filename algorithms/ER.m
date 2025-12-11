@@ -1,8 +1,9 @@
-function [obj, probe] = DM(expt, recon, probe)
+function [obj, probe] = ER(expt, recon, probe)
 % version 0: 11/12/2023. 
 % Please refer to the end of the code for licencing information.
 %
-% An implementation of the Difference Map ptychographic algorithm
+% An implementation of the Relaxed Average Alternating Reflections
+% ptychographic algorithm
 %
 % *** INPUTS ***
 %
@@ -38,14 +39,12 @@ function [obj, probe] = DM(expt, recon, probe)
 %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                                                                         %
-% Citations for this algorithm:                                           %                                      
+% Citations for this algorithm:                                           %
 % Andrew. M. Maiden, Wenjie Mei and Peng Li,                              %
 % "WASP: Weighted Average of Sequential Projections for ptychographic     %
 % phase retrieval,"                                                       %
-% Optics Express 32(12), pp. 21327-21344, (2024).                         %                                        
+% Optics Express 32(12), pp. 21327-21344, (2024).                         %
 %                                                                         %
-% P. Thibault et al, "High-resolution scanning x-ray diffraction          %
-% microscopy," Science 321 (5887), pp. 379-382 (2008).                    %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % Pre-processing steps
@@ -93,11 +92,6 @@ expt.dps = fftshift(fftshift(realsqrt(expt.dps),1),2);
 % zero-division constant
 c = 1e-10;
 
-% simple display
-imH = imagesc(angle(obj));
-axis image;
-colormap gray;
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % load variables onto gpu if required
@@ -117,14 +111,10 @@ for k = 1:recon.iters
     % exit wave update loop
     for j = 1:J
 
-        % calculate the jth exit wave
-        tempEW = probe.*obj(tlY(j):brY(j),tlX(j):brX(j));
-
-        % update current exit wave to conform with diffraction data
-        revisedEW = ifft2(expt.dps(:,:,j).*sign(fft2(2*tempEW - EWs(:,:,j))));
-
-        % update and store new exit wave
-        EWs(:,:,j) = EWs(:,:,j) + revisedEW - tempEW;
+        % update exit wave to conform with diffraction data
+        objBox     = obj(tlY(j):brY(j),tlX(j):brX(j));
+        tempEW     = probe.*objBox;
+        EWs(:,:,j) = ifft2(expt.dps(:,:,j).*sign(fft2(tempEW)));
 
     end
 
@@ -178,17 +168,11 @@ for k = 1:recon.iters
         EWs   = circshift(EWs,[-cp 0]);
     end
 
-    % update display
-
-    set(imH,'cdata',gather(angle(obj)));
-    drawnow();
-
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % format probe and obj for return
-
 probe = gather(probe);
 obj   = gather(obj);
 
