@@ -20,14 +20,49 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % change the filename here to load different datasests. 
-load('OpticalPtychoDataExample.mat');
+load('ptychograms/OpticalPtychoDataExample.mat');
+
+% Algorithm
+algorithm_name = 'WASP'; % 'WASP', 'RAAR', 'rPIE', 'ePIE', 'DM', 'ER'
+
+% Option to create initial probe
+%initProbe = TOOLCircleGenerator(512,10);
+
+% dimention scaling and flipping
+%expt.dps = flipdim(expt.dps,1); % diffraction patterns
+%expt.dps = flipdim(expt.dps,2);
+%expt.positions.x = 1.06*expt.positions.x; % Coordinates
+%expt.positions.y = 1.06*expt.positions.y;
 
 % set the reconstruction parameters
-recon.iters      = 2000;
+recon.iters      = 20;
 recon.gpu        = 1;            
 recon.alpha      = 2;         
 recon.beta       = 1;        
 recon.upLimit    = 2;       
 
 % run the algorithm
-[obj, probe] = WASP(expt, recon, initProbe);
+algorithm = str2func(algorithm_name);
+[obj, probe] = algorithm(expt, recon, initProbe);
+
+% Save intensity and phase as two colour-mapped images without using JVM/figures
+obj_intensity = abs(obj);
+obj_phase = angle(obj);
+probe_intensity = abs(probe);
+probe_phase = angle(probe);
+
+nmap = 256;
+cmap = gray(nmap);
+obj_rgb_in = mapToRGB(obj_intensity, cmap, nmap);
+probe_rgb_in = mapToRGB(probe_intensity, cmap, nmap);
+cmap = hsv(nmap);
+obj_rgb_ph = mapToRGB(obj_phase, cmap, nmap);
+probe_rgb_ph = mapToRGB(probe_phase, cmap, nmap);
+
+if ~exist('results', 'dir')
+    mkdir('results');
+end
+imwrite(obj_rgb_in, fullfile('results', sprintf('%s_result_iter%04d_intensity.png', algorithm_name, recon.iters)));
+imwrite(obj_rgb_ph, fullfile('results', sprintf('%s_result_iter%04d_phase.png', algorithm_name, recon.iters)));
+imwrite(probe_rgb_in, fullfile('results', sprintf('%s_probe_iter%04d_intensity.png', algorithm_name, recon.iters)));
+imwrite(probe_rgb_ph, fullfile('results', sprintf('%s_probe_iter%04d_phase.png', algorithm_name, recon.iters)));

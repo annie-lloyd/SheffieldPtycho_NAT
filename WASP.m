@@ -88,11 +88,6 @@ expt.dps = fftshift(fftshift(realsqrt(expt.dps),1),2);
 % zero-division constant
 c = 1e-10;
 
-% simple display
-imH = imagesc(angle(obj));
-axis image;
-colormap gray;
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % load variables onto gpu if required
@@ -157,10 +152,6 @@ for k = 1:recon.iters
         probe = circshift(probe,-cp);
         obj   = circshift(obj,-cp);
     end
-
-    % update display
-    set(imH,'cdata',gather(angle(obj)));
-    drawnow();
 
 end
 
