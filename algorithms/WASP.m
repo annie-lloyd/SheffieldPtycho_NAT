@@ -130,7 +130,6 @@ for k = 1:recon.iters
              = denO(tlY(j):brY(j),tlX(j):brX(j)) + abs(probe).^2;
         numP = numP + conj(objBox).*revisedEW;
         denP = denP + abs(objBox).^2;
-
     end
 
     % weighted average update of object and probe
