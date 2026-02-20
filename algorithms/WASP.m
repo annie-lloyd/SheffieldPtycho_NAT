@@ -17,8 +17,8 @@ function [obj, probe] = WASP(expt, recon, probe)
 %                         translation stage, in metres
 % expt.wavelength       - the beam wavelength in metres
 % expt.cameraPixelPitch - the pixel spacing of the detector
-% expt.cameraLength     - the geometric magnification at the front face of
-%                         the sample
+% expt.cameraLength     - the progogation distance from sample to detector
+%                     
 %
 % recon: a structure containing the reconstruction parameters, with the
 % following fields
@@ -55,14 +55,20 @@ function [obj, probe] = WASP(expt, recon, probe)
 expt.positions.x = expt.positions.x - min(expt.positions.x,[],'all');
 expt.positions.y = expt.positions.y - min(expt.positions.y,[],'all');
 
-% compute pixel pitch in the sample plane
+% These are the length in pixels of each diffraction pattern
 M   = size(expt.dps,1);
 N   = size(expt.dps,2);
+
+% Numerator is scaling factor that links diffraction plane to object plane
+% Demoninator is the total physical width of detector plane
+% This calculates size of a pixel in the sample plane of the real sample
 dx  = expt.wavelength*expt.cameraLength./...
     ([M,N]*expt.cameraPixelPitch);
 
 % convert positions to top left (tl) and bottom right (br)
 % pixel locations for each sample position
+% Creating window on the object that the probe will illuminate
+% This converts meters to pixel location at sample plane
 tlY = round(expt.positions.y/dx(1))+1;
 tlX = round(expt.positions.x/dx(2))+1;
 brY = tlY + M - 1;
@@ -73,19 +79,29 @@ brX = tlX + N - 1;
 % variable initialisations
 
 % initialise the "object" as free-space
+% 1 represents a fully transparent object so it starts a transparent
+% brY/X sets the object size to fit all scan positions
 obj = ones([max(brY,[],'all'),max(brX,[],'all')]);
 
 % find a suitable probe power from the brightest diffraction pattern
+% Makes sure probe has the same total brightness as the laser
+% Index b is the brightest diffraction pattern
+% Probe power calculates the total energy in the brightest diffraction pattern
 [~,b] = max(sum(expt.dps,[1,2]));
 probePower = sum(expt.dps(:,:,b),'all');
 
 % correct the initial probe's power
+% Creating the initial probe from runMe variable
+% This scales the intial probe to have the same power as the brightest one
 probe = probe*sqrt(probePower/(numel(probe)*sum(abs(probe(:)).^2)));
 
 % pre-square-root and pre-fftshift the diffraction patterns (for speed)
+% This converts intensity to the amplitude through square-rooting the center diffraction point
+% It shifts the center point to the corner for fft
 expt.dps = fftshift(fftshift(realsqrt(expt.dps),1),2);
 
 % zero-division constant
+% Prevents dividing by zero if very limited brightness
 c = 1e-10;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -99,9 +115,13 @@ end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% For number of iterations stated
 for k = 1:recon.iters
 
     % initialise numerator and denominator sums
+    % Numerator stores the error and gradient change 
+    % Denominator stores the weighting or nomralizaion factor/ intensity
+    % Initialised and set to same size as object and probe
     numP = 0*probe;
     denP = 0*probe;
     numO = 0*obj;
@@ -110,20 +130,31 @@ for k = 1:recon.iters
     % randomise the diffraction pattern order for sequential projections
     shuffleOrder = randperm(size(expt.dps,3));
 
+    % Loop through diffraction patterns
     for j = shuffleOrder
 
         % update exit wave to conform with diffraction data
+        % Crop the object to the size of the probe at that position with tlY/X for that specific region on object plane 
+        % Probe is much smaller than object so we only take the sub-region linking pixels ion final image to each diffraction pattern
         objBox    = obj(tlY(j):brY(j),tlX(j):brX(j));
+        % Creating exit wave
         currentEW = probe.*objBox;
+        % Propogate exit wave using FFT to reach the diffraction plane extracting only the phase
+        % Use the recorded amplitude then inverse FFT to return to the sample plane 
         revisedEW = ifft2(expt.dps(:,:,j).*sign(fft2(currentEW)));
 
         % sequential projection update of object and probe
+        % Update the object by adding the correction using the update formula from the referenced material for the small section of the object
+        % This is controlled by the error term that compares the current wave from before the update and revised wave from the diffraction pattern
+        % Remove the probe part through complex conjugate to leave the object update
         obj(tlY(j):brY(j),tlX(j):brX(j)) = objBox + ...
             conj(probe).*(revisedEW - currentEW)./(abs(probe).^2 + recon.alpha*mean(abs(probe).^2,'all'));
 
+        % Update the probe using the update function with the same logic for object update
         probe = probe + conj(objBox).*(revisedEW - currentEW)./(abs(objBox).^2 + recon.beta);
 
-        % update numerator and denominator sums
+        % update numerator and denominator sums 
+        % These gather information for all scan position for final more stable update asigning to the objective box
         numO(tlY(j):brY(j),tlX(j):brX(j))...
              = numO(tlY(j):brY(j),tlX(j):brX(j)) + conj(probe).*revisedEW;
         denO(tlY(j):brY(j),tlX(j):brX(j))...
@@ -134,20 +165,28 @@ for k = 1:recon.iters
     end
 
     % weighted average update of object and probe
+    % Genralising objective function to summarise all of the objective boxes
+    % Loop through all probe position adding to local changes to num and brightness to den 
+    % Num provides the singal of what the image should look like and den the weight of each to reduce noise from low intsity parts
+    % Divides to get averaged update for each pixel
     obj         = numO./(denO + c);
     probe       = numP./(denP + c);
 
     % Apply additional constraints:
 
     % limit hot pixels
+    % Creating limit for unphysical pixel brightness
     tooHigh      = abs(obj) > recon.upLimit;
+    % Fixing broken pixel only resetting magnitude and not the phase
     obj(tooHigh) = recon.upLimit*sign(obj(tooHigh));
 
     % recentre probe/object using probe intensity centre of mass
+    % Peventing probe from shifting off of the edge of its pixel grid
     absP2 = abs(probe).^2;
+    % Finding centre of mass using 1D profile comapring actual center to mathematical center
     cp = ...
         fix([M,N]/2 - [M,N].*[mean(cumsum(sum(absP2,2))), mean((cumsum(sum(absP2,1))))]/sum(absP2,'all') + 1);
-
+    % If this is off shift back to the center
     if any(cp)
         probe = circshift(probe,-cp);
         obj   = circshift(obj,-cp);
